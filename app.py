@@ -82,25 +82,20 @@ admin_db = client[ADMIN_DB]
 def load_nlp():
     return spacy.load("en_core_web_sm")
 
-nlp = load_nlp()
-
-@st.cache_resource
-def load_sentiment():
-    return pipeline("sentiment-analysis")
-
-sentiment_pipeline = load_sentiment()
-
-
-@st.cache_resource(show_spinner="🔄 Loading Sentiment Model...")
-def load_sentiment_model():
-    return pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
 
 @st.cache_resource
 def load_spacy_model():
     return spacy.load("en_core_web_sm")
-
+@st.cache_resource
+def load_sentiment_model():
+    return pipeline(
+        "sentiment-analysis",
+        model="cardiffnlp/twitter-roberta-base-sentiment-latest"
+    )
 
 model = load_sentiment_model()
+
+
 nlp = load_spacy_model()
 
 # ---------------------- THEME COLORS ----------------------

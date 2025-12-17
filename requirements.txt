@@ -4,8 +4,11 @@ pymongo==4.6.1
 bcrypt
 python-dotenv
 pandas
+numpy
 matplotlib
-transformers==4.36.2
-torch==2.1.2
-Pillow
+pillow
 dnspython
+
+transformers==4.33.3
+torch==2.0.1
+scikit-learn
