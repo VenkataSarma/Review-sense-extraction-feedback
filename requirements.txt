@@ -1,14 +1,13 @@
-streamlit
-spacy
-pymongo
+streamlit==1.31.0
+spacy==3.7.2
+pymongo==4.6.1
 bcrypt
 python-dotenv
 pandas
 matplotlib
-transformers
-torch
+transformers==4.36.2
+torch==2.1.2
 Pillow
 dnspython
-bson
 
 https://github.com/explosion/spacy-models/releases/download/en_core_web_sm-3.7.1/en_core_web_sm-3.7.1-py3-none-any.whl
