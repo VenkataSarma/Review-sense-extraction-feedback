@@ -78,6 +78,17 @@ client = get_db()
 user_db = client[USER_DB]
 admin_db = client[ADMIN_DB]
 
+@st.cache_resource
+def load_nlp():
+    return spacy.load("en_core_web_sm")
+
+nlp = load_nlp()
+
+@st.cache_resource
+def load_sentiment():
+    return pipeline("sentiment-analysis")
+
+sentiment_pipeline = load_sentiment()
 
 
 @st.cache_resource(show_spinner="🔄 Loading Sentiment Model...")
