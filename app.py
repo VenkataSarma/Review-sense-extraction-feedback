@@ -17,6 +17,9 @@ import string
 from bson.binary import Binary
 from PIL import Image
 from io import BytesIO
+
+from sklearn.metrics import accuracy_score, f1_score
+
 # ---------------------- ENV & CONFIG ----------------------
 load_dotenv()
 MONGO_URI = os.getenv("MONGODB_URI")
@@ -78,24 +81,18 @@ client = get_db()
 user_db = client[USER_DB]
 admin_db = client[ADMIN_DB]
 
-@st.cache_resource
-def load_nlp():
-    return spacy.load("en_core_web_sm")
 
+
+@st.cache_resource(show_spinner="🔄 Loading Sentiment Model...")
+def load_sentiment_model():
+    return pipeline("sentiment-analysis", model="cardiffnlp/twitter-roberta-base-sentiment-latest")
 
 @st.cache_resource
 def load_spacy_model():
     return spacy.load("en_core_web_sm")
-@st.cache_resource
-def load_sentiment_model():
-    return pipeline(
-        "sentiment-analysis",
-        model="cardiffnlp/twitter-roberta-base-sentiment-latest"
-    )
+
 
 model = load_sentiment_model()
-
-
 nlp = load_spacy_model()
 
 # ---------------------- THEME COLORS ----------------------
@@ -773,6 +770,49 @@ def register_page():
             else:
                st.error(msg)
 
+#----------helper function-------------------
+def compute_model_metrics():
+    """
+    Compute Accuracy and F1-score using corrected feedbacks only.
+    """
+    docs = list(
+        user_db[RESULTS_COLL].find(
+            {
+            "corrected_sentiment": {"$exists": True}
+            },
+            {
+        "_id": 0,
+        "sentiment": 1,
+        "corrected_sentiment": 1
+    }
+        )
+    )
+    if docs:
+        y_pred = [d["sentiment"] for d in docs]
+        y_true = [d["corrected_sentiment"] for d in docs]
+        accuracy = round(accuracy_score(y_true, y_pred) * 100, 2)
+        f1 = round(f1_score(y_true, y_pred, average="weighted") * 100, 2)
+    else:
+        accuracy, f1=None, None
+
+
+
+    y_true, y_pred = [], []
+
+    for d in docs:
+        if d.get("sentiment") and d.get("corrected_sentiment"):
+            y_pred.append(d["sentiment"].lower())
+            y_true.append(d["corrected_sentiment"].lower())
+
+    if not y_true:
+        return None, None
+
+    acc = accuracy_score(y_true, y_pred)
+    f1 = f1_score(y_true, y_pred, average="weighted")
+
+    return round(acc * 100, 2), round(f1 * 100, 2)
+
+
 #-------------ADMIN DASHBOARD-----------------#
 def admin_dashboard():
     st.markdown("## 👑 Admin Dashboard")
@@ -783,13 +823,14 @@ def admin_dashboard():
     corrected_feedbacks = user_db[RESULTS_COLL].count_documents({"active_learning": True})
     total_users = user_db[USER_COLL].count_documents({})
 
+    # ---------------- FETCH MODEL METRICS ----------------
+    accuracy, f1 = compute_model_metrics()
+
     # ---------------- STYLE ----------------
     box_color = "#ffffff" if st.session_state.theme == "light" else "#1e242c"
     text_color = colors["text"]
 
-    # ---------------- SMALL STAT BOXES ----------------
-    col1, col2, col3 = st.columns(3, gap="small")
-
+    # ---------------- STAT BOX FUNCTION ----------------
     def stat_box(title, value, color):
         st.markdown(f"""
         <div style="
@@ -807,6 +848,9 @@ def admin_dashboard():
         </div>
         """, unsafe_allow_html=True)
 
+    # ---------------- STAT BOXES (5 TOTAL) ----------------
+    col1, col2, col3, col4, col5 = st.columns(5, gap="small")
+
     with col1:
         stat_box("📩 Total Feedbacks", total_feedbacks, "#7B61FF")
 
@@ -816,12 +860,21 @@ def admin_dashboard():
     with col3:
         stat_box("👥 Users", total_users, "#3498DB")
 
+    with col4:
+        stat_box("🎯 Accuracy", f"{accuracy}%" if accuracy is not None else "N/A", "#E67E22")
+
+    with col5:
+        stat_box("📈 F1 Score", f"{f1}%" if f1 is not None else "N/A", "#9B59B6")
+
     st.markdown("---")
 
     # ---------------- SENTIMENT DISTRIBUTION ----------------
     st.markdown("### 📊 Sentiment Distribution (All Feedbacks)")
 
-    sentiment_docs = list(user_db[RESULTS_COLL].find({}, {"_id": 0, "sentiment": 1}))
+    sentiment_docs = list(
+        user_db[RESULTS_COLL].find({}, {"_id": 0, "sentiment": 1})
+    )
+
     if not sentiment_docs:
         st.info("No sentiment data found.")
         return
@@ -829,7 +882,7 @@ def admin_dashboard():
     sentiment_list = [
         s["sentiment"].lower()
         for s in sentiment_docs
-        if "sentiment" in s and isinstance(s["sentiment"], str)
+        if isinstance(s.get("sentiment"), str)
     ]
 
     counts = Counter(sentiment_list)
@@ -843,10 +896,10 @@ def admin_dashboard():
     }
     colors_list = [color_map.get(lbl, "#999999") for lbl in labels]
 
-    # ---------------- SMALL CENTER PIE ----------------
+    # ---------------- CENTERED PIE CHART ----------------
     st.markdown("<div style='display:flex; justify-content:center;'>", unsafe_allow_html=True)
 
-    fig, ax = plt.subplots(figsize=(2, 2))  # 50% size
+    fig, ax = plt.subplots(figsize=(2, 2))
     ax.pie(
         sizes,
         labels=labels,
@@ -1051,6 +1104,21 @@ def save_user_feedback(user_email, satisfied, thoughts, source, review_text=None
         "timestamp": datetime.now()
     })
 
+#-------------------------reset function -------------------
+def reset_single_analysis_state():
+    keys_to_reset = [
+        "analysis_done",
+        "analysis_result",
+        "feedback_submitted",
+        "show_feedback_box",
+        "latest_feedback",
+        "latest_sentiment",
+        "latest_confidence"
+    ]
+
+    for key in keys_to_reset:
+        if key in st.session_state:
+            del st.session_state[key]
 
 #------------------------------#
 
@@ -1227,7 +1295,24 @@ def user_dashboard():
                         aspects=result["aspects"],
                         aspect_pairs=[(str(a), str(o)) for a, o in result["aspect_pairs"]]
                     ) 
+                    # ✅ Treat YES feedback as verified ground truth
+                    user_db[RESULTS_COLL].update_one(
+                    {
+                        "review": result["text"],
+                        "user_email": st.session_state.user["email"]
+                    },
+                    {
+                        "$set": {
+                        "corrected_sentiment": result["label"],  # prediction confirmed
+                        "feedback_verified": True
+                    }
+                    }
+                    )
+
                     st.session_state.feedback_submitted = True
+                    reset_single_analysis_state()
+                    st.rerun()
+
                     
 
         # 👎 NO
@@ -1252,6 +1337,8 @@ def user_dashboard():
                     )
                     st.session_state.feedback_submitted = True
                     st.session_state.show_feedback_box = False
+                    reset_single_analysis_state()
+                    st.rerun()
                     
 
 
@@ -1483,6 +1570,16 @@ def batch_analysis_page():
                         aspects=result["aspects"],
                         aspect_pairs=result["aspect_pairs"]
                     )
+                user_db[RESULTS_COLL].update_many(
+    {
+        "user_email": st.session_state.user["email"]
+    },
+    {
+        "$set": {
+            "feedback_verified": True
+        }
+    }
+)
                 st.session_state.batch_feedback_submitted = True
                 
 
